@@ -4,6 +4,8 @@ A [Herdr](https://herdr.dev) layout that brings the review side of [mira](https:
 
 ![The mira layout: terminal, a side-by-side diff and the Changes panel](preview.png)
 
+**This layout is for the Herdr desktop app (`herdr-app`), not for `herdr-tui`.** It is written and tested against the app's window only.
+
 It is a set of Herdr mods plus one layout file. Nothing in Herdr is modified: the layout starts as a copy of Herdr's `main` and points its panels at the `mira-*` mods.
 
 ## What you get
@@ -35,7 +37,14 @@ It is a set of Herdr mods plus one layout file. Nothing in Herdr is modified: th
 
 ## Install
 
-Requirements: Herdr, `git`, `node` 24 (for the ChatGPT sign-in helper), `rg` for Search, `rsync` for the installer.
+Requirements: the Herdr desktop app, which provides these commands (all must be on your `PATH`):
+
+| Command | What it is | Used here for |
+|---|---|---|
+| `herdr-app` | The desktop app (the window). | Loads the layout and mods; `herdr-app do`, `check`, `status` drive and test them. Config lives in `~/.config/herdr-app`. |
+| `herdr-core` / `hc` | The background runtime that keeps terminals alive (`hc` is its short name). | Runs the terminals and agents shown in the window. Nothing to configure for this layout. |
+
+`herdr-tui` is a different front end and this layout isn't made for it. Also needed: `git`, `node` 24 (for the ChatGPT sign-in helper), `rg` for Search, `rsync` for the installer.
 
 ```sh
 git clone https://github.com/IGUNUBLUE/mira-layout ~/Projects/mira-layout

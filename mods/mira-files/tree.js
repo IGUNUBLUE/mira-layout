@@ -2,8 +2,8 @@
 // dimmed and file-type icons. Clicking a file opens it beside the terminal (mira-files as a pane).
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, window, fonts, run, shared } from "herdr";
-import { fileIcon, folderIcon } from "./logic.js";
+import { spaces, panes, focused, exec, watchFolder, theme, window, fonts, run, shared, setShared } from "herdr";
+import { fileIcon, folderIcon, insideRoot, deleteCommand, menuItems } from "./logic.js";
 
 let last = null;
 // While a mod pane (an editor, a diff) has the keyboard, the previous terminal's folder stays.
@@ -48,6 +48,8 @@ async function directory(path, on) {
 export class Tree {
   init(cx) {
     this.nerd = nerdFont(); this.ignored = new Set();
+    this.menu = null; this.confirm = null; this.note = null; this.removing = false;
+    this.confirmHandle = cx.focus_handle();
     this.seenTick = shared("mira-changes.tick")?.at ?? 0;
     this.saved = new Map();
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
@@ -85,6 +87,7 @@ export class Tree {
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.ignored = new Set(); this.watched = null; this.error = null; this.limited = false;
+      this.menu = null; this.confirm = null; this.note = null;
       this.loading = false;
     }
     if (!cwd || this.loading) return;
@@ -145,6 +148,88 @@ export class Tree {
     run("pane.split", { direction: "right", ...(pane ? { pane } : {}), mod: "mira-files", props: { file: path, root: this.root, on: this.on } });
   }
 
+  // ---------- right-click menu ----------
+
+  act(action, entry, path, cx) {
+    this.menu = null;
+    if (action === "open") { if (entry.dir) this.toggle(path, cx); else this.open(path); }
+    else if (action === "copy-path") cx.write_to_clipboard(`${this.root}/${path}`);
+    else if (action === "copy-rel") cx.write_to_clipboard(path);
+    else if (action === "delete") {
+      this.confirm = { path, dir: entry.dir, name: entry.name, selected: 0 };
+      this.confirmHandle.focus();
+    }
+    cx.notify();
+  }
+
+  answer(cx, yes) {
+    const c = this.confirm; this.confirm = null;
+    cx.notify();
+    if (yes && c) this.remove(c, cx);
+  }
+
+  async remove(c, cx) {
+    if (!insideRoot(c.path)) { this.note = { text: "Refusing to delete a path outside the folder", error: true }; cx.notify(); return; }
+    const context = this.context, abs = `${this.root}/${c.path}`;
+    this.removing = true; this.note = null; cx.notify();
+    try {
+      let [program, args] = deleteCommand(abs, !this.on && window()?.platform === "windows");
+      let r;
+      try { r = await exec(program, args, { on: this.on }); }
+      catch (e) {
+        if (!this.on || !String(e).includes("cannot start sh: program not found")) throw e;
+        [program, args] = deleteCommand(abs, true);
+        r = await exec(program, args, { on: this.on });
+      }
+      if (r.code !== 0) throw new Error(r.stderr.trim() || "Could not delete");
+      if (this.context === context) {
+        for (const folder of [...this.folders]) if (folder === c.path || folder.startsWith(c.path + "/")) { this.folders.delete(folder); this.entries.delete(folder); }
+        const parent = c.path.includes("/") ? c.path.slice(0, c.path.lastIndexOf("/")) : "";
+        this.entries.set(parent, (this.entries.get(parent) ?? []).filter(e => e.name !== c.name));
+        this.note = { text: `Deleted ${c.name}` };
+      }
+      setShared("mira-changes.tick", { root: this.root, at: Date.now() });
+    } catch (e) {
+      if (this.context === context) this.note = { text: String(e?.message ?? e).replace(/^Error: /, ""), error: true };
+    } finally {
+      this.removing = false;
+      if (this.context === context) { this.loading = false; this.refresh(cx); }
+      cx.notify();
+    }
+  }
+
+  menuCard(t, entry, path, open, depth) {
+    return v_flex().id(`menu-${path}`).flex_none().ml(8 + depth * 18).mr(8).my(2).p(4).gap(1).rounded(7).border_1().border_color(t.border).bg(t.popover).text_size(12)
+      .on_mouse_down_out((_e, cx) => { if (this.menu === path) { this.menu = null; cx.notify(); } })
+      .children(menuItems({ dir: entry.dir, open }).map(([label, action]) =>
+        div().id(`menu-${path}-${action}`).h(26).px(8).flex().items_center().rounded(5).cursor_pointer().hover(s => s.bg(t.hover))
+          .text_color(action === "delete" ? t.ansi1 : t.foreground)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.act(action, entry, path, cx); }).child(label)));
+  }
+
+  confirmCard(t) {
+    const c = this.confirm, buttons = [["Cancel", false], ["Delete", true]];
+    return div().id("confirm-scrim").absolute().inset_0().bg(t.background + "cc").flex().items_center().justify_center().p(14)
+      .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.answer(cx, false); })
+      .child(v_flex().id("confirm").w_full().max_w(340).p(14).gap(10).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
+        .track_focus(this.confirmHandle)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_key_down((e, cx) => {
+          if (e.key === "escape") this.answer(cx, false);
+          else if (e.key === "tab" || e.key === "left" || e.key === "right") { c.selected = 1 - c.selected; cx.notify(); }
+          else if (e.key === "enter") this.answer(cx, c.selected === 1);
+          else return;
+          cx.stop_propagation();
+        })
+        .child(div().text_size(14).font_semibold().child(c.dir ? "Delete folder?" : "Delete file?"))
+        .child(div().text_size(12).text_color(t.muted).child(c.dir ? "The folder and everything inside it will be deleted. This can't be undone." : "The file will be deleted. This can't be undone."))
+        .child(div().px(8).py(4).rounded(6).bg(t.raised).text_size(11).truncate().child(c.path))
+        .child(h_flex().justify_end().gap(8).children(buttons.map(([label, yes], i) =>
+          h_flex().id(`confirm-${i}`).h(28).px(12).flex_none().items_center().justify_center().rounded(7).text_size(12).cursor_pointer().hover(s => s.opacity(0.88))
+            .bg(yes ? t.ansi1 : t.raised).text_color(yes ? "#ffffff" : t.foreground).border_1().border_color(c.selected === i ? t.accent : yes ? t.ansi1 : t.border)
+            .on_click((_e, cx) => { cx.stop_propagation(); this.answer(cx, yes); }).child(label)))));
+  }
+
   isIgnored(path) {
     for (let p = `${this.root}/${path}`; p.length > this.root.length; p = p.slice(0, p.lastIndexOf("/"))) if (this.ignored.has(p)) return true;
     return false;
@@ -163,11 +248,13 @@ export class Tree {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       const dim = !mark && this.isIgnored(path);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.open(path))
+        .on_click((_e, cx) => { this.menu = null; if (entry.dir) this.toggle(path, cx); else this.open(path); })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.menu = this.menu === path ? null : path; cx.notify(); })
         .child(entry.dir ? svg(`mods/mira-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(this.icon(t, entry, open))
         .child(div().flex_1().min_w(0).truncate().text_color(dim ? t.dim : mark === "A" ? t.ansi2 : mark === "M" ? t.blocked : mark === "D" || mark === "U" ? t.ansi1 : t.foreground).child(entry.name))
         .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark))));
+      if (this.menu === path) out.push(this.menuCard(t, entry, path, open, depth));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
@@ -178,12 +265,17 @@ export class Tree {
     const tick = shared("mira-changes.tick");
     if (tick && tick.at > this.seenTick) { this.seenTick = tick.at; this.refresh(cx); }
     const t = theme();
-    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    return v_flex().id("files").size_full().min_h(0).relative().rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.root?.split(/[\\/]/).pop() ?? "")))
+      .when(Boolean(this.note) || this.removing, el => el.child(h_flex().flex_none().px(14).py(5).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
+        .text_color(this.note?.error ? t.ansi1 : t.muted)
+        .child(div().flex_1().min_w(0).truncate().child(this.removing ? "Deleting…" : this.note.text))
+        .when(Boolean(this.note), e => e.child(div().id("files-note-close").cursor_pointer().text_color(t.dim).on_click((_e, cx) => { this.note = null; cx.notify(); }).child("×")))))
       .child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total"))));
+        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total"))))
+      .when(Boolean(this.confirm), el => el.child(this.confirmCard(t)));
   }
 }

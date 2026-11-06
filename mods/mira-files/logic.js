@@ -83,3 +83,21 @@ export function zoomStep(scale, deltaY) {
   const clamped = Math.max(0.05, Math.min(32, next));
   return Math.abs(clamped - 1) < 0.04 ? 1 : clamped;
 }
+
+
+/** A path relative to the tree's root that stays inside it: no "..", no leading slash or drive. */
+export const insideRoot = (rel) => typeof rel === "string" && rel !== "" && !/^([\\/]|[A-Za-z]:)/.test(rel) && !rel.split(/[\\/]/).some(part => part === ".." || part === "." || part === "");
+
+/** Command that deletes one file, link or folder tree, as [program, args]. The path is an argument, never part of the script. */
+export function deleteCommand(abs, windows) {
+  if (windows) return ["powershell", ["-NoProfile", "-Command", "& { param($p) Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } '" + abs.replace(/['‘’‚‛]/g, "$&$&") + "'"]];
+  return ["sh", ["-c", 'rm -rf -- "$1"', "files", abs]];
+}
+
+/** The rows of a right-click menu for an entry. */
+export const menuItems = ({ dir, open }) => [
+  [dir ? (open ? "Collapse" : "Expand") : "Open", "open"],
+  ["Copy path", "copy-path"],
+  ["Copy relative path", "copy-rel"],
+  ["Delete", "delete"],
+];

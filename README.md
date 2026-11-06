@@ -28,6 +28,7 @@ It is a set of Herdr mods plus one layout file. Nothing in Herdr is modified: th
 **Files** (`mira-files`)
 
 - The tree with git colors, ignored files dimmed and file-type icons (from a Nerd Font when one is installed).
+- **Right-click** a file or folder for **Open** (or Expand/Collapse), **Copy path**, **Copy relative path** and **Delete**. Delete asks first, removes a folder with everything inside and can't be undone by the layout; a deleted git-tracked file shows up in Changes.
 - A click opens the file beside the terminal in an **editor** with syntax highlighting and **autosave** (1 s after you stop typing, and when the pane closes). It never overwrites a file that changed on disk under your edits: autosave pauses and offers **Reload from disk** or **Overwrite**. Files without unsaved edits follow changes on disk by themselves.
 - **Images** (PNG, JPEG, GIF, WebP, BMP, ICO) open in a viewer: scroll to zoom, drag to pan, **Fit** and **100%**. SVGs open as text with a **Preview**.
 

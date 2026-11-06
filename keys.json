@@ -1,0 +1,10 @@
+{
+  "layout:mira": {
+    "ctrl-alt-f": "mira-tabs.search",
+    "ctrl-shift-g": "mira-tabs.changes",
+    "ctrl-shift-m": "mira-status.focus"
+  },
+  "mod:mira-files": {
+    "ctrl-s": "mira-files.save"
+  }
+}

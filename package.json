@@ -1,0 +1,7 @@
+{
+  "name": "mira-layout",
+  "private": true,
+  "type": "module",
+  "description": "Tests for the mira layout's pure modules. The layout itself needs no build.",
+  "scripts": { "test": "node --test tests/*.test.js" }
+}

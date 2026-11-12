@@ -3,6 +3,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, props, closeOverlay, theme, setShared } from "herdr";
+import { transferBranch } from "./transfer.js";
 
 const FORMAT = "%(refname)%00%(refname:short)%00%(upstream:short)%00%(committerdate:unix)%00%(HEAD)%00%(worktreepath)";
 
@@ -15,7 +16,7 @@ function parseRefs(text) {
 
 export default class Branches extends View {
   init(_props, cx) {
-    this.list = []; this.remotes = []; this.at = 0; this.error = null; this.busy = null;
+    this.list = []; this.remotes = []; this.at = 0; this.error = null; this.busy = null; this.confirm = null;
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Switch to branch…" });
     this.input.on("change", (_e, cx) => { this.at = 0; cx.notify(); });
@@ -49,7 +50,7 @@ export default class Branches extends View {
 
   pick(cx, b) {
     if (this.busy || b.current) { if (b.current) this.close(); return; }
-    if (b.elsewhere) { this.error = `${b.name} is checked out in another worktree (${b.worktree}).`; cx.notify(); return; }
+    if (b.elsewhere) { this.confirm = b; this.error = null; cx.notify(); return; }
     const { root, on } = props();
     let args;
     if (b.remote) {
@@ -58,6 +59,7 @@ export default class Branches extends View {
       const existing = this.list.find((x) => !x.remote && x.name === local);
       if (existing) {
         if (existing.upstream !== b.name) { this.error = `A local branch ${local} already exists (tracking ${existing.upstream ?? "nothing"}); switch to it instead.`; cx.notify(); return; }
+        if (existing.elsewhere) { this.confirm = existing; this.error = null; cx.notify(); return; }
         args = ["switch", local];
       } else args = ["switch", "--track", "-c", local, b.name];
     } else args = ["switch", b.name];
@@ -75,8 +77,35 @@ export default class Branches extends View {
     cx.notify();
   }
 
+  move(cx) {
+    if (!this.confirm || this.busy) return;
+    const b = this.confirm, { root, on } = props();
+    this.busy = b.name; this.error = null; cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const result = await transferBranch(exec, { root, worktree: b.worktree, branch: b.name, on });
+        this.busy = null;
+        if (result.ok) { setShared("mira-changes.tick", { root, at: Date.now() }); this.close(); return; }
+        this.error = result.error;
+      } catch (err) {
+        this.busy = null;
+        this.error = `Transfer interrupted: ${String(err)}. Check both worktrees before retrying.`;
+      }
+      cx.notify();
+    });
+  }
+
   render() {
     const t = theme(), shown = this.shown();
+    if (this.confirm) return v_flex().id("branches-confirm").track_focus(this.handle).w_full().p(16).gap(12).bg(t.popover).text_size(13).text_color(t.foreground)
+      .child(div().text_size(15).child("Move branch to this worktree?"))
+      .child(div().child(this.confirm.name))
+      .child(div().text_size(12).text_color(t.muted).child(`The other worktree will be left detached at its current commit: ${this.confirm.worktree}`))
+      .child(div().text_size(12).text_color(t.muted).child("Both worktrees must be clean. Any session in the other worktree will see detached HEAD."))
+      .when(Boolean(this.error), (e) => e.child(div().text_size(12).text_color(t.ansi1).child(this.error)))
+      .child(h_flex().gap(8)
+        .child(div().id("cancel-move").px(10).py(6).rounded(6).bg(t.hover).cursor_pointer().on_click((_e, cx) => { if (!this.busy) { this.confirm = null; this.error = null; cx.notify(); } }).child("Cancel"))
+        .child(div().id("confirm-move").px(10).py(6).rounded(6).bg(t.selected).cursor_pointer().on_click((_e, cx) => this.move(cx)).child(this.busy ? "Moving…" : "Move branch here")));
     if (this.at >= shown.length) this.at = Math.max(0, shown.length - 1);
     return v_flex().id("branches").track_focus(this.handle).w_full().p(12).gap(8).bg(t.popover).text_size(13).text_color(t.foreground)
       .on_key_down((e, cx) => {
@@ -102,6 +131,6 @@ export default class Branches extends View {
           .when(this.busy === b.name, (e) => e.child(div().text_size(11).text_color(t.dim).child("switching…")))
           .when(b.remote && !b.current && this.busy !== b.name, (e) => e.child(div().text_size(11).text_color(t.dim).child("remote")))))
         .when(!shown.length, (e) => e.child(div().p(8).text_size(12).text_color(t.dim).child(this.list.length ? "No branch matches" : "Loading branches…"))))
-      .child(div().text_size(11).text_color(t.dim).child("Enter switches · remote branches get a local tracking branch · no fetch"));
+      .child(div().text_size(11).text_color(t.dim).child("Enter switches branch · other worktrees require confirmation"));
   }
 }
